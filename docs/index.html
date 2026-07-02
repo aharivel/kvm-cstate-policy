@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KVM_CAP_CSTATE_POLICY — Per-VM C-State Policy Enforcement</title>
+<style>
+  :root {
+    --bg: #1a1b26;
+    --surface: #24283b;
+    --border: #3b4261;
+    --text: #c0caf5;
+    --text-dim: #565f89;
+    --accent: #7aa2f7;
+    --green: #9ece6a;
+    --red: #f7768e;
+    --orange: #ff9e64;
+    --yellow: #e0af68;
+    --purple: #bb9af7;
+    --cyan: #7dcfff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 1.8rem;
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  h1 code {
+    color: var(--cyan);
+    font-size: 1.6rem;
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+  }
+  h2 {
+    font-size: 1.3rem;
+    color: var(--purple);
+    margin-top: 2.5rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05rem;
+    color: var(--orange);
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+  p { margin-bottom: 1rem; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.9rem;
+  }
+  th {
+    background: var(--surface);
+    color: var(--accent);
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border);
+    font-weight: 600;
+  }
+  td {
+    padding: 0.5rem 0.8rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: rgba(36, 40, 59, 0.5); }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    background: var(--surface);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.88rem;
+    color: var(--cyan);
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: var(--text);
+  }
+  .keyword { color: var(--purple); }
+  .comment { color: var(--text-dim); font-style: italic; }
+  .value { color: var(--green); }
+  .type { color: var(--cyan); }
+  ul, ol {
+    margin: 0.5rem 0 1rem 1.5rem;
+  }
+  li { margin-bottom: 0.4rem; }
+  .callout {
+    background: var(--surface);
+    border-left: 4px solid var(--accent);
+    padding: 1rem 1.2rem;
+    margin: 1.5rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .callout.warning {
+    border-left-color: var(--orange);
+  }
+  .callout.success {
+    border-left-color: var(--green);
+  }
+  .tag {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .tag-red { background: rgba(247,118,142,0.2); color: var(--red); }
+  .tag-green { background: rgba(158,206,106,0.2); color: var(--green); }
+  .tag-orange { background: rgba(255,158,100,0.2); color: var(--orange); }
+  .tag-blue { background: rgba(122,162,247,0.2); color: var(--accent); }
+  .flow {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1.2rem;
+    margin: 1rem 0 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .dim { color: var(--text-dim); }
+  strong { color: var(--text); font-weight: 600; }
+  em { color: var(--yellow); font-style: normal; }
+  .stack-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.3rem 0;
+  }
+  .stack-arrow {
+    color: var(--text-dim);
+    font-size: 1.2rem;
+    text-align: center;
+    margin: 0.2rem 0;
+  }
+  .stack-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.4rem 0.8rem;
+    font-family: monospace;
+    font-size: 0.85rem;
+    text-align: center;
+    flex: 1;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<h1><code>KVM_CAP_CSTATE_POLICY</code></h1>
+<p class="subtitle">Per-VM C-State Policy Enforcement — Proposal for KVM upstream</p>
+
+<!-- ============================================================ -->
+<h2>The Gap Today</h2>
+
+<p>KVM offers exactly two modes for guest idle management. There is no middle ground:</p>
+
+<table>
+<tr>
+  <th>Mode</th><th>How it works</th><th>Host control</th><th>Guest autonomy</th><th>VM exit cost</th>
+</tr>
+<tr>
+  <td><strong>Default</strong><br><code>cpu-pm=off</code></td>
+  <td>Guest MWAIT/HLT causes VM exit → KVM intercepts → host decides C-state</td>
+  <td><span class="tag tag-green">Full</span></td>
+  <td><span class="tag tag-red">None</span></td>
+  <td>Every halt</td>
+</tr>
+<tr>
+  <td><strong>Delegated</strong><br><code>cpu-pm=on</code></td>
+  <td>Guest MWAIT executes directly on hardware, no VM exit</td>
+  <td><span class="tag tag-red">None</span></td>
+  <td><span class="tag tag-green">Full</span></td>
+  <td>Zero</td>
+</tr>
+</table>
+
+<div class="callout warning">
+<strong>The problem:</strong> the client wants guest C-state autonomy (VNF owns power decisions)
+<em>and</em> a host-side kill switch (disable deep idle per-VM for debugging, no guest cooperation needed).
+Today these are mutually exclusive.
+</div>
+
+<!-- ============================================================ -->
+<h2>Experimental Proof</h2>
+
+<p>We verified on Intel Xeon E5-2630 v3 (Haswell-EP) with <code>cpu-pm=on</code>:</p>
+
+<table>
+<tr><th>Host-side approach</th><th>Works?</th><th>Why</th></tr>
+<tr>
+  <td>cpuidle sysfs <code>disable</code> on pinned cores</td>
+  <td><span class="tag tag-red">No</span></td>
+  <td>Guest MWAIT bypasses host cpuidle governor entirely</td>
+</tr>
+<tr>
+  <td>MSR 0xE2 (<code>PKG_CST_CONFIG_CONTROL</code>)</td>
+  <td><span class="tag tag-red">No</span></td>
+  <td>Locked by BIOS (bit 15 = 1), cannot write at runtime</td>
+</tr>
+<tr>
+  <td>Force-busy (spin on pCPU)</td>
+  <td><span class="tag tag-orange">Crude</span></td>
+  <td>Burns 100% CPU, steals cycles from vCPU</td>
+</tr>
+<tr>
+  <td>Guest-side sysfs via agent/SSH</td>
+  <td><span class="tag tag-green">Yes</span></td>
+  <td>Requires guest cooperation (agent up, SSH reachable)</td>
+</tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>The Proposal</h2>
+
+<p>A new KVM capability that intercepts MWAIT, applies a <strong>per-VM policy</strong>,
+then executes the allowed C-state on behalf of the guest.
+The guest still decides what it <em>wants</em> — KVM enforces a <em>ceiling</em>.</p>
+
+<h3>Capability Definition</h3>
+
+<pre><code><span class="type">KVM_CAP_CSTATE_POLICY</span>
+  Architecture: x86
+  Target:       VM
+  Parameters:
+    args[0] = <span class="keyword">max_cstate</span>   <span class="comment">// 0-6, or -1 for unrestricted</span>
+    args[1] = <span class="keyword">flags</span>        <span class="comment">// reserved, 0</span></code></pre>
+
+<h3>Policy Values</h3>
+
+<table>
+<tr><th>max_cstate</th><th>Behavior</th><th>Use case</th></tr>
+<tr>
+  <td><code>-1</code></td>
+  <td>No interception — current <code>cpu-pm=on</code> behavior</td>
+  <td>Full delegation</td>
+</tr>
+<tr>
+  <td><code>6</code></td>
+  <td>Guest drives C-states, KVM monitors but doesn't restrict</td>
+  <td>Normal operation with observability</td>
+</tr>
+<tr>
+  <td><code>3</code></td>
+  <td>Allow up to C3 (33 µs exit), block C6 (133 µs exit)</td>
+  <td>Gradual tuning</td>
+</tr>
+<tr>
+  <td><code>1</code></td>
+  <td>Guest requests C6 → KVM downgrades to C1. <strong>Kill switch.</strong></td>
+  <td><span class="tag tag-orange">Debug / latency-sensitive</span></td>
+</tr>
+<tr>
+  <td><code>0</code></td>
+  <td>No idle at all (C0 only). Maximum power, minimum latency.</td>
+  <td><span class="tag tag-red">Emergency</span></td>
+</tr>
+</table>
+
+<h3>Internal Flow</h3>
+
+<div class="flow"><span class="dim">Guest issues MWAIT with C-state hint</span>
+        │
+        ▼
+<span class="type">KVM intercepts</span> (VM exit on MWAIT)
+        │
+        ▼
+KVM reads <span class="keyword">kvm→max_cstate</span>
+        │
+        ├── requested ≤ max_cstate
+        │       → <span class="value">execute native MWAIT with guest's hint</span>
+        │
+        └── requested > max_cstate
+                → <span class="keyword">downgrade</span>: MWAIT with max_cstate hint
+                → or: skip MWAIT, return to guest (C0)</div>
+
+<!-- ============================================================ -->
+<h2>Design Questions</h2>
+
+<ol>
+<li><strong>Exit cost toggle.</strong> When <code>max_cstate = -1</code>, keep current cpu-pm=on behavior (no exits).
+When a policy is active, switch to interception. This means toggling VMCS execution controls at runtime — doable, needs care.</li>
+
+<li><strong>MWAIT hint → C-state mapping.</strong> MWAIT sub-states don't map 1:1 to C-state names across CPU families.
+Policy should work on logical levels (C0/C1/C3/C6). KVM needs a translation table per CPU model.</li>
+
+<li><strong>HLT vs MWAIT.</strong> Guests may use HLT (no sub-state hint). Policy must cover both:
+HLT with policy → KVM chooses C-state up to ceiling. MWAIT with policy → KVM caps the hint.</li>
+
+<li><strong>Runtime toggle.</strong> Kill switch requires changing <code>max_cstate</code> on a live VM.
+The ioctl updates <code>kvm→max_cstate</code> atomically — takes effect on next halt/mwait.</li>
+
+<li><strong>Interaction with <code>halt_poll_ns</code>.</strong> When interception is active, halt polling kicks in again.
+They become orthogonal: <code>halt_poll_ns</code> = how long to spin; <code>max_cstate</code> = deepest state allowed after.</li>
+
+<li><strong>Per-vCPU vs per-VM.</strong> Start per-VM. Per-vCPU enables mixed policies
+(dataplane vCPUs in C0, control-plane in C6) but adds complexity.</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2>Full Stack Integration</h2>
+
+<div style="max-width: 500px; margin: 1.5rem auto;">
+  <div class="stack-box" style="border-color: var(--green);">
+    <span class="dim">Nova:</span> <code>hw:cpu_pm_max_cstate=N</code> <span class="dim">(flavor extra-spec)</span>
+  </div>
+  <div class="stack-arrow">↓</div>
+  <div class="stack-box" style="border-color: var(--purple);">
+    <span class="dim">libvirt:</span> <code>&lt;cpu-pm-max-cstate&gt;N&lt;/cpu-pm-max-cstate&gt;</code>
+  </div>
+  <div class="stack-arrow">↓</div>
+  <div class="stack-box" style="border-color: var(--orange);">
+    <span class="dim">QEMU:</span> <code>-overcommit cpu-pm-max-cstate=N</code>
+  </div>
+  <div class="stack-arrow">↓</div>
+  <div class="stack-box" style="border-color: var(--accent);">
+    <span class="dim">KVM:</span> <code>KVM_CAP_CSTATE_POLICY</code> ioctl
+  </div>
+  <div class="stack-arrow">↓</div>
+  <div class="stack-box" style="border-color: var(--cyan);">
+    Hardware: MWAIT executed with capped hint
+  </div>
+</div>
+
+<p>The kill switch becomes a <strong>live <code>virsh</code> command</strong> or <strong>Nova API call</strong>
+that reaches KVM via ioctl. No guest cooperation. No redeployment.</p>
+
+<!-- ============================================================ -->
+<h2>Comparison With Current Options</h2>
+
+<table>
+<tr>
+  <th></th>
+  <th><code>halt_poll_ns</code></th>
+  <th><code>cpu-pm=on</code></th>
+  <th><code>KVM_CAP_CSTATE_POLICY</code></th>
+</tr>
+<tr>
+  <td>Who decides C-state</td>
+  <td>Host (KVM)</td>
+  <td>Guest</td>
+  <td><em>Guest proposes, host caps</em></td>
+</tr>
+<tr>
+  <td>Host override possible</td>
+  <td>Yes (system-wide)</td>
+  <td>No</td>
+  <td><span class="tag tag-green">Yes (per-VM, live)</span></td>
+</tr>
+<tr>
+  <td>Guest cooperation needed</td>
+  <td>No</td>
+  <td>Yes (for kill switch)</td>
+  <td><span class="tag tag-green">No</span></td>
+</tr>
+<tr>
+  <td>VM exit on idle</td>
+  <td>Yes</td>
+  <td>No</td>
+  <td>Only when policy active</td>
+</tr>
+<tr>
+  <td>Granularity</td>
+  <td>on/off</td>
+  <td>on/off</td>
+  <td><span class="tag tag-blue">C-state level (0–6)</span></td>
+</tr>
+<tr>
+  <td>Runtime changeable</td>
+  <td>Yes</td>
+  <td>No (boot property)</td>
+  <td><span class="tag tag-green">Yes</span></td>
+</tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>Prior Art</h2>
+
+<ul>
+<li><strong><code>KVM_CAP_HALT_POLL</code></strong> — per-VM halt polling override. Same design pattern: VM capability, ioctl, per-VM value. Merged 2020.</li>
+<li><strong>Xen ACPI idle driver</strong> — per-domain C-state policy via ACPI integration. KVM lacks this entirely.</li>
+<li><strong>cpuidle governors</strong> (menu, TEO, haltpoll) — host-side C-state selection. This proposal moves that to a per-VM policy.</li>
+<li><strong>AWS Nitro / Azure Boost</strong> — cloud hypervisors likely have internal per-VM idle policies (proprietary, not upstream).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>Implementation Estimate</h2>
+
+<table>
+<tr><th>Layer</th><th>Effort</th><th>Scope</th></tr>
+<tr>
+  <td>KVM (kernel)</td>
+  <td><span class="tag tag-orange">Medium</span></td>
+  <td>New ioctl, <code>struct kvm</code> field, MWAIT/HLT exit handler policy check, VMCS toggle. ~200–400 lines.</td>
+</tr>
+<tr>
+  <td>QEMU</td>
+  <td><span class="tag tag-green">Low</span></td>
+  <td>New <code>-overcommit</code> sub-option, KVM ioctl call. ~50 lines.</td>
+</tr>
+<tr>
+  <td>libvirt</td>
+  <td><span class="tag tag-blue">Low–Medium</span></td>
+  <td>New XML element, schema, QEMU command generation. ~100–200 lines.</td>
+</tr>
+<tr>
+  <td>Nova</td>
+  <td><span class="tag tag-green">Low</span></td>
+  <td>Flavor extra-spec → libvirt XML passthrough. ~50 lines.</td>
+</tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>Next Steps</h2>
+
+<ol>
+<li><strong>Prototype:</strong> minimal KVM patch — intercept MWAIT, read per-VM <code>max_cstate</code>, cap the hint. Test on Haswell.</li>
+<li><strong>Benchmark:</strong> measure exit cost of MWAIT interception vs direct execution. If &lt;1 µs, tradeoff is worth it.</li>
+<li><strong>RFC patch</strong> to <code>kvm@vger.kernel.org</code>. Reference <code>KVM_CAP_HALT_POLL</code> as precedent.</li>
+<li><strong>Engage maintainers:</strong> Paolo Bonzini, Sean Christopherson (KVM x86).</li>
+<li><strong>Parallel:</strong> revive libvirt <code>&lt;cpu-pm&gt;</code> merge — even without this proposal, <code>cpu-pm=on</code> needs proper libvirt support.</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2>Impact</h2>
+
+<div class="callout success">
+<strong>If merged:</strong> first upstream mechanism giving cloud operators <strong>per-VM, live, host-enforced
+C-state control</strong> without guest cooperation. Fills the gap between "host controls everything"
+and "guest controls everything."
+<br><br>
+<strong>For NFV:</strong> VNF vendor sets preferred C-states via guest cpuidle. Platform operator sets the ceiling
+via flavor/policy. Debug sessions override to C0/C1 with a single <code>virsh</code> command.
+No redeployment. No guest agent. No SSH.
+</div>
+
+<footer>
+  Generated from halt-polling investigation — panther04 (Haswell-EP), CentOS Stream 9, KVM/QEMU/libvirt
+</footer>
+
+</body>
+</html>
