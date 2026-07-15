@@ -1,0 +1,201 @@
+KVM: x86: Proposal for per-VM C-state policy enforcement
+========================================================
+
+1. Problem statement
+--------------------
+
+KVM currently offers two mutually exclusive modes for guest idle
+management on x86:
+
+  (a) Default (cpu-pm=off): guest HLT/MWAIT causes a VM exit. KVM
+      intercepts and decides the C-state via the host cpuidle governor.
+      The host has full control but pays exit overhead on every idle.
+
+  (b) Delegated (cpu-pm=on, QEMU -overcommit cpu-pm=on): guest MWAIT
+      executes directly on hardware via VMCS secondary execution control
+      "MWAIT exiting" = 0. Zero VM exit overhead, but the host has no
+      visibility or control over which C-states the guest enters.
+
+There is no middle ground. With delegation active, the host cannot cap
+the deepest C-state a guest may enter — not via host cpuidle sysfs, not
+via MSR 0xE2 (PKG_CST_CONFIG_CONTROL, typically BIOS-locked), and not
+via any KVM interface.
+
+This creates an operational gap for NFV and latency-sensitive cloud
+deployments where:
+
+  - The guest (VNF) should own C-state selection because it knows its
+    own latency requirements.
+  - The host operator needs a "kill switch" to cap deep C-states per-VM
+    for debugging or SLA enforcement, without VM restart and without
+    requiring guest cooperation (SSH/agent may be unavailable).
+
+2. Proposed capability: KVM_CAP_CSTATE_POLICY
+----------------------------------------------
+
+A new KVM VM-scoped capability that lets the host set a maximum C-state
+ceiling per VM. When a policy is active, KVM intercepts MWAIT/HLT,
+inspects the requested C-state, and enforces the ceiling before
+executing the idle instruction on behalf of the guest.
+
+  KVM_CAP_CSTATE_POLICY
+    Architecture: x86
+    Target:       VM (struct kvm)
+    Parameters:
+      args[0] = max_cstate (-1 to 6)
+      args[1] = flags (reserved, must be 0)
+
+  Semantics:
+    max_cstate = -1  No interception; current cpu-pm=on behavior.
+                     MWAIT executes directly (VMCS "MWAIT exiting" = 0).
+    max_cstate = 0   Force C0. Guest halts return immediately (no idle).
+    max_cstate = 1   Cap at C1. Guest requests for C3/C6 are downgraded.
+    max_cstate = 6   Cap at C6 (effectively unrestricted on most
+                     platforms, but interception is active for
+                     monitoring).
+
+The capability follows the same pattern as KVM_CAP_HALT_POLL: a per-VM
+ioctl that overrides system-wide behavior for a specific VM, changeable
+at runtime without VM restart.
+
+3. Internal flow
+----------------
+
+Important constraint: KVM must NOT execute MWAIT inline in the exit
+handler. Two reasons:
+
+  (a) VM exits unconditionally clear the monitor armed state (Intel
+      SDM Vol 3, 27.5.5). A host-side MWAIT after the exit would find
+      no armed monitor and fall through immediately as a NOP, resulting
+      in busy-wait rather than idle.
+
+  (b) Executing MWAIT synchronously would keep the vCPU thread in
+      TASK_RUNNING without yielding via schedule() or notifying RCU
+      via rcu_idle_enter(). This breaks scheduler load balancing and
+      can stall RCU grace periods.
+
+The enforcement point is therefore not "execute a capped MWAIT" but
+"constrain cpuidle state selection within the existing halt path."
+
+When max_cstate >= 0 (policy active):
+
+  1. VMCS "MWAIT exiting" = 1 (intercept MWAIT).
+  2. On VM exit for MWAIT or HLT:
+     a. Extract the C-state hint from the MWAIT operand (if MWAIT).
+     b. Map the hint to a logical C-state level.
+     c. Enter kvm_vcpu_halt() with a max_cstate constraint.
+     d. kvm_vcpu_halt() proceeds as normal: halt polling (if enabled),
+        then schedule(). The host cpuidle governor selects the idle
+        state, but KVM enforces that the selected state does not
+        exceed max_cstate.
+     e. rcu_idle_enter()/schedule() are called as in the existing
+        halt path — no scheduler or RCU invariants are violated.
+
+  The cpuidle constraint can be enforced by either:
+    - Temporarily limiting the per-CPU cpuidle states via the
+      dev->states_usage[].disable mechanism before blocking.
+    - Passing a constraint to the idle governor (if a suitable
+      interface exists or is added).
+
+When max_cstate = -1 (unrestricted):
+
+  1. VMCS "MWAIT exiting" = 0 (direct execution, no VM exit).
+  2. Equivalent to current cpu-pm=on behavior.
+
+Transitioning between -1 and >= 0 requires toggling the VMCS secondary
+execution control at runtime. This is the same mechanism used for other
+VMCS control toggles and is well-precedented in KVM.
+
+4. Measured VM exit overhead
+----------------------------
+
+We benchmarked the exit-entry round-trip cost on Intel Xeon E5-2630 v3
+(Haswell-EP, 2x8C/16T) using ftrace with x86-tsc clock (nanosecond
+precision). MSR_WRITE exits were used as a proxy for pure exit mechanism
+cost — fast synchronous round-trips with no scheduling or blocking.
+
+  Samples:  154
+  Min:      433 ns
+  Median:   867 ns  (0.87 us)
+  Mean:     1,523 ns (1.52 us)
+  p95:      3,037 ns (3.04 us)
+  p99:      3,740 ns (3.74 us)
+  Max:      13,963 ns (13.96 us)
+
+Relative to C-state exit latencies:
+
+  C-state   Exit latency   VM exit adds   Relative overhead
+  C1E       10 us          +0.87 us       +8.7%
+  C3        33 us          +0.87 us       +2.6%
+  C6        133 us         +0.87 us       +0.65%
+
+The interception overhead is sub-microsecond at median and negligible
+relative to the C-state transitions it governs. For the deepest C-states
+where power savings matter most (C3/C6), the overhead is under 3%.
+
+5. Design questions for discussion
+-----------------------------------
+
+(a) VMCS control toggling: switching "MWAIT exiting" at runtime when
+    the policy changes between -1 and >= 0. This requires a VMCS
+    update on each vCPU. Safe to do via kvm_vcpu_kick() + request
+    flag, or is there a better pattern?
+
+(b) MWAIT hint to C-state mapping: MWAIT sub-states (EAX[7:4] for
+    C-state, EAX[3:0] for sub-state) vary across CPU families. Should
+    KVM maintain a per-model translation table, or should the policy
+    operate on raw MWAIT hints directly?
+
+(c) cpuidle constraint mechanism: the proposed flow caps C-states
+    within kvm_vcpu_halt() via the host cpuidle framework. The
+    cleanest approach seems to be temporarily disabling states via
+    dev->states_usage[].disable before blocking. Is there a better
+    interface, or should we propose a new cpuidle API for transient
+    per-CPU state constraints?
+
+(d) Interaction with halt_poll_ns: when policy is active (max_cstate
+    >= 0), interception is on, so halt polling applies again. The two
+    knobs become orthogonal:
+      halt_poll_ns = spin duration before any C-state
+      max_cstate   = deepest C-state after polling fails
+    Is this the right interaction model?
+
+(e) Per-vCPU vs per-VM: starting with per-VM is simpler. Per-vCPU
+    would allow mixed policies (dataplane vCPUs in C0, control-plane
+    vCPUs in C6). Worth the complexity for v1?
+
+6. Userspace integration path
+-----------------------------
+
+  Kernel:   KVM ioctl (this proposal)
+  QEMU:     New -overcommit sub-option: cpu-pm-max-cstate=N
+  libvirt:  New XML element in <features><kvm>
+
+Runtime changes via the ioctl would allow virsh/QEMU monitor commands
+to adjust the policy on a live VM without restart.
+
+7. Prior art
+------------
+
+  - KVM_CAP_HALT_POLL: per-VM halt polling override. Same design
+    pattern — VM capability, ioctl, per-VM value. Merged in 2020.
+
+  - Xen ACPI idle driver: Xen has per-domain C-state policy via its
+    ACPI integration. KVM has no equivalent.
+
+  - Host kernel max_cstate: the kernel parameter
+    intel_idle.max_cstate= caps C-states system-wide, but has no
+    per-VM or per-CPU granularity.
+
+  - QEMU cpu-pm=on: delegates MWAIT/HLT to guest but provides no
+    policy mechanism. libvirt support for cpu-pm was never merged
+    upstream despite being documented.
+
+8. Next steps
+-------------
+
+I am looking for feedback on the overall approach and the design
+questions above. If there is consensus that this capability belongs
+in KVM, I am willing to implement the full stack — starting with the
+KVM ioctl and MWAIT/HLT exit handler changes, followed by the QEMU
+and libvirt integration.
