@@ -1,0 +1,54 @@
+Subject: Re: [RFC PATCH] KVM: x86: RFC for per-VM C-state policy enforcement (KVM_CAP_CSTATE_POLICY)
+
+Hi Paolo, Sean,
+
+I sent an RFC to kvm@ for a per-VM C-state policy capability
+(KVM_CAP_CSTATE_POLICY). The idea is to let the host set a max C-state ceiling
+per VM, filling the gap between full interception (cpu-pm=off) and full
+delegation (cpu-pm=on).
+
+https://lore.kernel.org/kvm/20260715124235.1444895-1-aharivel@redhat.com/
+
+I've been tracing the implementation path and I've hit a design question I'd
+value your input on before going further.
+
+The enforcement point is kvm_vcpu_halt() → kvm_vcpu_block() → schedule()
+→ cpuidle. The problem is that cpuidle has no per-task C-state constraint
+— states_usage[].disable is per-CPU, and forced_idle_latency_limit_ns is also
+per-CPU.
+
+So three options:
+
+  (a) Temporarily toggle states_usage[i].disable on the pinned pCPU
+      before/after kvm_vcpu_block(). Simple, works with existing API,
+      but only correct with dedicated pinning (overcommit with mixed
+      policies would race on the disable flags).
+
+  (b) Use forced_idle_latency_limit_ns on the pCPU — same per-CPU
+      limitation, and latency-based rather than state-index-based.
+
+  (c) Propose a new cpuidle API for per-task idle constraints (e.g.
+      a per-task_struct annotation checked by the governor). Correct
+      for all cases, but bigger scope and needs cpuidle maintainer
+      buy-in (Rafael Wysocki).
+
+My use case is NFV with dedicated pinned cores, so option (a) would work.
+
+But I'm wondering:
+
+1. Is this use case too niche for upstream KVM? The target is cloud
+operators running VNFs on dedicated cores who need a host-side
+kill switch for deep C-states without guest cooperation.
+
+2. If it is worth pursuing — would you accept option (a) scoped to
+the dedicated-pinning case for v1, or would you want the cleaner
+option (c) from the start?
+
+3. Is there a simpler approach I'm missing entirely? I looked at
+whether KVM could cap things before reaching schedule() (e.g.
+custom idle with MONITOR+MWAIT), but that breaks scheduler/RCU
+invariants as the sashiko review pointed out.
+
+Happy to prototype whichever direction you think has the best chance of landing.
+
+Anthony
