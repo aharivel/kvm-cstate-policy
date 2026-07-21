@@ -1,6 +1,16 @@
 KVM: x86: Proposal for per-VM C-state policy enforcement
 ========================================================
 
+Changes since v1:
+  - Corrected internal flow (section 3): enforcement goes through
+    kvm_vcpu_halt() + cpuidle constraint, NOT inline MWAIT execution.
+    v1 was ambiguous on this point.
+  - Added rationale for why inline MWAIT in the exit handler is wrong:
+    monitor state cleared on VM exit (SDM 27.5.5), scheduler/RCU
+    invariant violations.
+  - Expanded design question (a) with concrete enforcement options
+    (A/B/C) and cpuidle call chain analysis.
+
 1. Problem statement
 --------------------
 
@@ -136,22 +146,51 @@ where power savings matter most (C3/C6), the overhead is under 3%.
 5. Design questions for discussion
 -----------------------------------
 
-(a) VMCS control toggling: switching "MWAIT exiting" at runtime when
+(a) Enforcement mechanism — cpuidle constraint
+
+    The enforcement point is kvm_vcpu_halt() → kvm_vcpu_block() →
+    schedule() → cpuidle. The problem: cpuidle has no per-task
+    C-state constraint. states_usage[].disable is per-CPU, and
+    forced_idle_latency_limit_ns is also per-CPU.
+
+    Three options I see:
+
+      Option A: Temporarily toggle states_usage[i].disable on the
+      pinned pCPU before/after kvm_vcpu_block(). Set
+      CPUIDLE_STATE_DISABLED_BY_DRIVER for states > max_cstate,
+      restore after wakeup. Simple, works with existing API, but
+      only correct with dedicated pinning — overcommit with mixed
+      policies would race on the disable flags.
+
+      Option B: Use forced_idle_latency_limit_ns on the pCPU.
+      Same per-CPU limitation, and latency-based rather than
+      state-index-based — less precise.
+
+      Option C: Propose a new cpuidle API for per-task idle
+      constraints (e.g. a per-task_struct annotation checked by
+      the governor during select()). Correct for all cases, but
+      bigger scope and needs cpuidle maintainer buy-in.
+
+    My use case is NFV with dedicated pinned cores, so option A
+    would work for v1 scoped to that case. But I'd rather not
+    invest in prototyping the wrong approach.
+
+    Is this use case too niche for upstream KVM? The target is
+    cloud operators running VNFs on dedicated cores who need a
+    host-side kill switch for deep C-states without guest
+    cooperation. If it is worth pursuing — would you accept
+    option A scoped to dedicated pinning for v1, or would you
+    want option C from the start?
+
+(b) VMCS control toggling: switching "MWAIT exiting" at runtime when
     the policy changes between -1 and >= 0. This requires a VMCS
     update on each vCPU. Safe to do via kvm_vcpu_kick() + request
     flag, or is there a better pattern?
 
-(b) MWAIT hint to C-state mapping: MWAIT sub-states (EAX[7:4] for
+(c) MWAIT hint to C-state mapping: MWAIT sub-states (EAX[7:4] for
     C-state, EAX[3:0] for sub-state) vary across CPU families. Should
     KVM maintain a per-model translation table, or should the policy
     operate on raw MWAIT hints directly?
-
-(c) cpuidle constraint mechanism: the proposed flow caps C-states
-    within kvm_vcpu_halt() via the host cpuidle framework. The
-    cleanest approach seems to be temporarily disabling states via
-    dev->states_usage[].disable before blocking. Is there a better
-    interface, or should we propose a new cpuidle API for transient
-    per-CPU state constraints?
 
 (d) Interaction with halt_poll_ns: when policy is active (max_cstate
     >= 0), interception is on, so halt polling applies again. The two
